@@ -14,6 +14,15 @@ const MC_VERSION = process.env.MC_VERSION || "1.21.11";
 const OWNER_NAME = process.env.OWNER_NAME || "JouwMinecraftNaam";
 const RECONNECT_DELAY = parseInt(process.env.RECONNECT_DELAY || "10000", 10);
 
+const BUILD_TYPES = {
+  house: "starterhouse",
+  farm: "farm",
+  storage: "storage",
+  shop: "shop",
+  spawn: "spawn",
+  castle: "castle"
+};
+
 let bot;
 let mcData;
 let followTarget = null;
@@ -86,7 +95,7 @@ function createBot() {
       const player = bot.players[followTarget]?.entity;
       if (!player) return;
       bot.pathfinder.setGoal(new goals.GoalFollow(player, 2), true);
-    }, 3000);
+    }, 2000);
   });
 
   bot.on("chat", async (username, message) => {
@@ -126,40 +135,54 @@ function createBot() {
 }
 
 async function handleCommand(username, message) {
-  if (message === "!help") {
-    bot.chat("Commands: !setbuilder, !builder, !follow, !stop, !status, !house, !farm, !storage, !shop, !spawn, !castle");
+  const args = message.split(/\s+/);
+  const command = args[0].toLowerCase();
+  const buildType = args[1]?.toLowerCase();
+
+  if (command === "!help") {
+    bot.chat("Commands: !follow, !stop, !setbuilder <house|farm|storage|shop|spawn|castle>, !builder, !build <type>, !status");
     return;
   }
 
-  if (message === "!setbuilder") {
-    const player = bot.players[username]?.entity;
-    if (!player) return bot.chat("❌ Ik zie je niet.");
+  if (command === "!setbuilder") {
+    await setBuilderWaypoint(username);
 
-    builderWaypoint = {
-      x: Math.floor(player.position.x),
-      y: Math.floor(player.position.y),
-      z: Math.floor(player.position.z)
-    };
-
-    saveData();
-    bot.chat(`✅ Builder waypoint opgeslagen: ${builderWaypoint.x} ${builderWaypoint.y} ${builderWaypoint.z}`);
-    webhook(`Builder waypoint opgeslagen: ${builderWaypoint.x} ${builderWaypoint.y} ${builderWaypoint.z}`);
+    if (buildType) {
+      const schem = BUILD_TYPES[buildType];
+      if (!schem) {
+        bot.chat("❌ Onbekend type. Kies: house, farm, storage, shop, spawn, castle");
+        return;
+      }
+      await pasteSchematic(schem, buildType);
+    } else {
+      bot.chat("Tip: gebruik !setbuilder house, !setbuilder farm, !setbuilder storage, !setbuilder shop, !setbuilder spawn of !setbuilder castle");
+    }
     return;
   }
 
-  if (message === "!builder") {
+  if (command === "!builder") {
     await gotoBuilderWaypoint();
     return;
   }
 
-  if (message === "!follow") {
+  if (command === "!build") {
+    const schem = BUILD_TYPES[buildType];
+    if (!schem) {
+      bot.chat("❌ Gebruik: !build house/farm/storage/shop/spawn/castle");
+      return;
+    }
+    await pasteSchematic(schem, buildType);
+    return;
+  }
+
+  if (command === "!follow") {
     followTarget = username;
     bot.chat(`👣 Ik volg ${username}`);
     webhook(`Volgt nu ${username}`);
     return;
   }
 
-  if (message === "!stop") {
+  if (command === "!stop") {
     followTarget = null;
     bot.pathfinder.setGoal(null);
     bot.chat("🛑 Gestopt.");
@@ -167,18 +190,38 @@ async function handleCommand(username, message) {
     return;
   }
 
-  if (message === "!status") {
+  if (command === "!status") {
     const p = bot.entity.position;
-    bot.chat(`📍 Positie: ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`);
+    const wp = builderWaypoint ? `${builderWaypoint.x} ${builderWaypoint.y} ${builderWaypoint.z}` : "geen";
+    bot.chat(`📍 Positie: ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)} | waypoint: ${wp}`);
     return;
   }
 
-  if (message === "!house") return pasteSchematic("starterhouse");
-  if (message === "!farm") return pasteSchematic("farm");
-  if (message === "!storage") return pasteSchematic("storage");
-  if (message === "!shop") return pasteSchematic("shop");
-  if (message === "!spawn") return pasteSchematic("spawn");
-  if (message === "!castle") return pasteSchematic("castle");
+  if (command === "!house") return pasteSchematic("starterhouse", "house");
+  if (command === "!farm") return pasteSchematic("farm", "farm");
+  if (command === "!storage") return pasteSchematic("storage", "storage");
+  if (command === "!shop") return pasteSchematic("shop", "shop");
+  if (command === "!spawn") return pasteSchematic("spawn", "spawn");
+  if (command === "!castle") return pasteSchematic("castle", "castle");
+}
+
+async function setBuilderWaypoint(username) {
+  const player = bot.players[username]?.entity;
+  if (!player) {
+    bot.chat("❌ Ik zie je niet.");
+    return false;
+  }
+
+  builderWaypoint = {
+    x: Math.floor(player.position.x),
+    y: Math.floor(player.position.y),
+    z: Math.floor(player.position.z)
+  };
+
+  saveData();
+  bot.chat(`✅ Builder waypoint opgeslagen: ${builderWaypoint.x} ${builderWaypoint.y} ${builderWaypoint.z}`);
+  webhook(`Builder waypoint opgeslagen: ${builderWaypoint.x} ${builderWaypoint.y} ${builderWaypoint.z}`);
+  return true;
 }
 
 async function gotoBuilderWaypoint() {
@@ -187,6 +230,7 @@ async function gotoBuilderWaypoint() {
     return false;
   }
 
+  followTarget = null;
   bot.chat("🏗️ Naar builder waypoint...");
   bot.pathfinder.setGoal(new goals.GoalBlock(builderWaypoint.x, builderWaypoint.y, builderWaypoint.z));
 
@@ -194,24 +238,26 @@ async function gotoBuilderWaypoint() {
   return true;
 }
 
-async function pasteSchematic(name) {
+async function pasteSchematic(schematicName, displayName = schematicName) {
   if (!builderWaypoint) {
     bot.chat("❌ Eerst !setbuilder gebruiken.");
     return;
   }
 
-  bot.chat(`🏗️ ${name} bouwen met WorldEdit...`);
-  webhook(`Start bouwen: ${name}`);
+  bot.chat(`🏗️ ${displayName} bouwen op builder waypoint...`);
+  webhook(`Start bouwen: ${displayName}`);
 
   await gotoBuilderWaypoint();
-  await wait(1000);
+  await wait(1500);
 
-  bot.chat(`//schem load ${name}`);
-  await wait(1200);
-  bot.chat("//paste -a");
+  // Gebruik 1 slash, want dit werkte op jouw server.
+  bot.chat(`/schem load ${schematicName}`);
+  await wait(2500);
+  bot.chat(`/paste -a`);
+  await wait(1500);
 
-  bot.chat(`✅ ${name} geplaatst.`);
-  webhook(`✅ Gebouwd: ${name}`);
+  bot.chat(`✅ ${displayName} command uitgevoerd op waypoint.`);
+  webhook(`✅ Gebouwd: ${displayName}`);
 }
 
 createBot();
